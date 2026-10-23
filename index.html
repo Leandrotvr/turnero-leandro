@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reservá tu turno</title>
+<style>
+  :root{--bg:#f4f6fb;--card:#fff;--ink:#1d2433;--mute:#6b7488;--brand:#009ee3;--brand-d:#0079b0;--ok:#1a9d5c;--warn:#c77d00;--bad:#c0392b;--line:#e3e7f0}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  .wrap{max-width:640px;margin:0 auto;padding:16px}
+  header{display:flex;justify-content:space-between;align-items:center;margin:8px 0 16px}
+  header h1{font-size:20px;margin:0}
+  header a{font-size:13px;color:var(--mute);text-decoration:none}
+  .card{background:var(--card);border-radius:14px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.07);margin-bottom:14px}
+  h2{font-size:17px;margin:0 0 12px}
+  .days{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px}
+  .day,.slot{border:1px solid var(--line);background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer;font-size:14px;color:var(--ink)}
+  .day{min-width:78px;text-align:center;flex:0 0 auto}
+  .day.sel,.slot.sel{background:var(--brand);color:#fff;border-color:var(--brand)}
+  .slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:8px;margin-top:6px}
+  .slot:disabled{background:#f0f1f5;color:#aab;cursor:not-allowed;text-decoration:line-through}
+  label{display:block;font-size:13px;color:var(--mute);margin:12px 0 4px}
+  input{width:100%;padding:11px;border:1px solid var(--line);border-radius:10px;font-size:15px}
+  button.primary{background:var(--brand);color:#fff;border:0;border-radius:10px;padding:13px 16px;font-size:15px;font-weight:600;cursor:pointer;width:100%;margin-top:14px}
+  button.primary:hover{background:var(--brand-d)}
+  button.primary:disabled{background:#b8c4d0;cursor:not-allowed}
+  button.ghost{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:14px;cursor:pointer}
+  .row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .row:last-child{border:0}
+  .row span:first-child{color:var(--mute)}
+  .msg{padding:10px 12px;border-radius:10px;font-size:14px;margin-bottom:12px}
+  .msg.warn{background:#fff4e0;color:#8a5a00}
+  .msg.ok{background:#e6f6ee;color:#14724a}
+  .msg.bad{background:#fdecea;color:#a1291c}
+  .tag{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:600}
+  .tag.inf{background:#fff4e0;color:var(--warn)}
+  .tag.ok{background:#e6f6ee;color:var(--ok)}
+  .tag.bad{background:#fdecea;color:var(--bad)}
+  .tag.gr{background:#eceef3;color:var(--mute)}
+  .small{font-size:12px;color:var(--mute)}
+  .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .spin{display:inline-block;width:16px;height:16px;border:3px solid #cfe9f7;border-top-color:var(--brand);border-radius:50%;animation:g 1s linear infinite;vertical-align:-3px;margin-right:8px}
+  @keyframes g{to{transform:rotate(360deg)}}
+  canvas{max-width:100%;height:auto;border:1px solid var(--line);border-radius:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 id="title"></h1>
+    <a href="#admin" id="adminLink">Administrar</a>
+  </header>
+  <div id="app"></div>
+</div>
+
+<script>
+/* ============ CONFIGURACIÓN ============ */
+const CONFIG = {
+  negocio: "Tu consultorio",
+  monto: 1000,                     // solo para mostrar; el importe real lo define la Edge Function crear-pago
+  moneda: "$",
+  duracionMin: 60,
+  horaInicio: 9,
+  horaFin: 17,
+  diasHabiles: [1,2,3,4,5],        // 0=dom ... 6=sáb
+  diasAdelante: 14,                // cuántos días hábiles hacia adelante se puede reservar
+  retencionMin: 15                 // minutos que se guarda el horario mientras se paga (igual que en la función)
+};
+
+/* Base de datos online (Supabase). Si se dejan vacíos, funciona en MODO DEMOSTRACIÓN:
+   el pago se simula y los datos quedan solo en este navegador. */
+const SUPABASE_URL = "https://hodjmhsqcbmyyjdkxmxp.supabase.co";
+const SUPABASE_KEY = "sb_publishable_XN9f3BDQe3sUNnh3PYglZA_my11T3_M";   // clave pública (no es secreta)
+
+/* ============ UTILIDADES ============ */
+const ONLINE = !!(SUPABASE_URL && SUPABASE_KEY);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const iso = d => d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+const fmtFecha = s => { const [y,m,d] = s.split("-").map(Number); return new Date(y,m-1,d).toLocaleDateString("es-AR",{weekday:"long",day:"numeric",month:"long",year:"numeric"}); };
+const money = n => CONFIG.moneda + " " + Number(n).toLocaleString("es-AR");
+const hh = m => String(Math.floor(m/60)).padStart(2,"0") + ":" + String(m%60).padStart(2,"0");
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => { const r = Math.random()*16|0; return (c==="x"?r:(r&3|8)).toString(16); }));
+const hora12 = ts => new Date(ts).toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"});
+
+/* ============ ALMACÉN DE DATOS ============ */
+// --- Modo demostración: localStorage (pago simulado) ---
+const K_BOOK = "turnos_demo_reservas";
+const lsLoad = () => { try { return JSON.parse(localStorage.getItem(K_BOOK)) ?? []; } catch { return []; } };
+const lsSave = v => { try { localStorage.setItem(K_BOOK, JSON.stringify(v)); } catch {} };
+const vista = b => b && ({ ...b, estado: (b.estado === "pendiente" && b.vence <= Date.now()) ? "vencido" : b.estado });
+
+const localStore = {
+  async ocupados() {
+    const s = new Set();
+    lsLoad().forEach(b => { if (b.estado === "confirmado" || (b.estado === "pendiente" && b.vence > Date.now())) s.add(b.fecha + "|" + b.hora); });
+    return s;
+  },
+  async iniciarPago(fecha, hora, d) {
+    const all = lsLoad();
+    if (all.some(b => b.fecha === fecha && b.hora === hora && (b.estado === "confirmado" || (b.estado === "pendiente" && b.vence > Date.now())))) throw new Error("horario_ocupado");
+    const b = { codigo: "T-" + Math.random().toString(36).slice(2,8).toUpperCase(), token: uid(), fecha, hora, nombre: d.nombre, tel: d.tel,
+                mail: d.mail, monto: CONFIG.monto, estado: "pendiente", vence: Date.now() + CONFIG.retencionMin*60000, creado: Date.now() };
+    all.push(b); lsSave(all);
+    return { token: b.token, init_point: null };
+  },
+  async ver(token) { return vista(lsLoad().find(b => b.token === token) || null); },
+  async cancelar(token) { const all = lsLoad(), b = all.find(x => x.token === token && x.estado === "pendiente"); if (b) { b.estado = "cancelado"; lsSave(all); } },
+  async simular(token) { const all = lsLoad(), b = all.find(x => x.token === token); if (b) { b.estado = "confirmado"; b.pagado = Date.now(); b.mp_payment_id = "DEMO-" + Math.floor(Math.random()*1e8); lsSave(all); } },
+  async listar() { return lsLoad().map(vista); },
+  async estado(codigo, estado) { const all = lsLoad(), b = all.find(x => x.codigo === codigo); if (b) { b.estado = estado; lsSave(all); } },
+  haySesion: () => true
+};
+
+// --- Modo online: Supabase (API REST + Edge Functions) ---
+const TOKEN_KEY = "turnos_admin_token";
+const getToken = () => { try { return sessionStorage.getItem(TOKEN_KEY); } catch { return null; } };
+const setToken = t => { try { t ? sessionStorage.setItem(TOKEN_KEY, t) : sessionStorage.removeItem(TOKEN_KEY); } catch {} };
+
+async function sb(path, { method = "GET", body, admin = false, headers = {} } = {}) {
+  const h = { apikey: SUPABASE_KEY, "Content-Type": "application/json", ...headers };
+  if (admin) h.Authorization = "Bearer " + getToken();
+  const r = await fetch(SUPABASE_URL + path, { method, headers: h, body: body ? JSON.stringify(body) : undefined });
+  if (r.status === 401 && admin) { setToken(null); throw new Error("sesion_vencida"); }
+  const t = await r.text();
+  if (!r.ok) throw new Error(t || String(r.status));
+  return t ? JSON.parse(t) : null;
+}
+const rpc = (name, args) => sb("/rest/v1/rpc/" + name, { method: "POST", body: args });
+
+const remoteStore = {
+  async ocupados(desde, hasta) {
+    const rows = await rpc("slots_ocupados", { p_desde: desde, p_hasta: hasta });
+    return new Set(rows.map(r => r.fecha + "|" + r.hora));
+  },
+  async iniciarPago(fecha, hora, d) {
+    const r = await fetch(SUPABASE_URL + "/functions/v1/crear-pago", {
+      method: "POST", headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({ fecha, hora, nombre: d.nombre, tel: d.tel, mail: d.mail })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "error");
+    return j;
+  },
+  ver: token => rpc("ver_reserva", { p_token: token }),
+  cancelar: token => rpc("cancelar_pendiente", { p_token: token }),
+  listar: () => sb("/rest/v1/reservas?select=*&order=fecha.asc,hora.asc", { admin: true }).then(rows => rows.map(b => ({ ...b, estado: (b.estado === "pendiente" && new Date(b.vence) <= new Date()) ? "vencido" : b.estado }))),
+  estado: (codigo, estado) => sb("/rest/v1/reservas?codigo=eq." + encodeURIComponent(codigo),
+                                 { method: "PATCH", admin: true, body: { estado }, headers: { Prefer: "return=minimal" } }),
+  async login(email, password) {
+    const r = await sb("/auth/v1/token?grant_type=password", { method: "POST", body: { email, password } });
+    setToken(r.access_token);
+  },
+  haySesion: () => !!getToken()
+};
+const store = ONLINE ? remoteStore : localStore;
+
+/* ============ ESTADO ============ */
+const URL_TOKEN = new URLSearchParams(location.search).get("t");
+let state = { step: URL_TOKEN ? "retorno" : "pick", fecha: null, hora: null, msg: "", datos: {}, token: URL_TOKEN, ocup: new Set(), poll: !!URL_TOKEN && ONLINE, verTodo: false };
+let gen = 0;
+const $app = document.getElementById("app");
+document.getElementById("title").textContent = CONFIG.negocio;
+
+function dias() {
+  const out = [], base = new Date(); base.setHours(0,0,0,0);
+  for (let i = 0; out.length < CONFIG.diasAdelante && i < 400; i++) {
+    const d = new Date(base); d.setDate(base.getDate() + i);
+    if (CONFIG.diasHabiles.includes(d.getDay())) out.push(d);
+  }
+  return out;
+}
+function horariosDe(fechaISO) {
+  const out = [], hoy = iso(new Date()), n = new Date(), ahora = n.getHours()*60 + n.getMinutes();
+  for (let m = CONFIG.horaInicio*60; m + CONFIG.duracionMin <= CONFIG.horaFin*60; m += CONFIG.duracionMin) {
+    if (fechaISO === hoy && m <= ahora) continue;
+    out.push(m);
+  }
+  return out;
+}
+function limpiarURL() { try { history.replaceState(null, "", location.pathname); } catch {} }
+function nuevoTurno(msg) { limpiarURL(); gen++; state = { ...state, step: "pick", hora: null, token: null, poll: false, msg: msg || "" }; vistaCliente(); }
+
+/* ============ VISTAS DEL CLIENTE ============ */
+function route() {
+  gen++;
+  const admin = location.hash === "#admin";
+  const a = document.getElementById("adminLink");
+  a.textContent = admin ? "Volver a reservar" : "Administrar";
+  a.href = admin ? "#" : "#admin";
+  admin ? vistaAdmin() : vistaCliente();
+}
+window.addEventListener("hashchange", route);
+window.addEventListener("pageshow", e => { if (e.persisted && state.token) { state.step = "retorno"; state.poll = ONLINE; route(); } });
+
+function vistaCliente() {
+  if (state.step === "pick") return vistaElegir();
+  if (state.step === "form") return vistaDatos();
+  if (state.step === "retorno") return vistaRetorno(state.poll);
+}
+
+async function vistaElegir() {
+  const my = ++gen;
+  const ds = dias();
+  if (!state.fecha || !ds.some(d => iso(d) === state.fecha)) state.fecha = iso(ds[0]);
+  let aviso = state.msg; state.msg = "";
+  try { state.ocup = await store.ocupados(iso(ds[0]), iso(ds[ds.length-1])); }
+  catch (e) { aviso = aviso || "No se pudo cargar la disponibilidad. Revisá tu conexión."; state.ocup = new Set(); }
+  if (my !== gen) return;
+  const ocupado = (f, m) => state.ocup.has(f + "|" + m);
+  $app.innerHTML = `
+    ${aviso ? `<div class="msg warn">${esc(aviso)}</div>` : ""}
+    ${ONLINE ? "" : '<div class="msg warn"><b>Modo demostración:</b> el pago es simulado y los datos quedan solo en este navegador.</div>'}
+    <div class="card">
+      <h2>1. Elegí el día</h2>
+      <div class="days">${ds.map(d => {
+        const f = iso(d), t = d.toLocaleDateString("es-AR",{weekday:"short",day:"numeric",month:"short"});
+        return `<button class="day ${f===state.fecha?"sel":""}" data-f="${f}">${esc(t)}</button>`;
+      }).join("")}</div>
+    </div>
+    <div class="card">
+      <h2>2. Elegí el horario</h2>
+      <div class="slots">${horariosDe(state.fecha).map(m =>
+        `<button class="slot ${state.hora===m?"sel":""}" data-h="${m}" ${ocupado(state.fecha,m)?"disabled":""}>${hh(m)}</button>`
+      ).join("") || '<span class="small">No quedan horarios para este día.</span>'}</div>
+      <p class="small">Valor del turno: <b>${money(CONFIG.monto)}</b>. El turno queda confirmado cuando se aprueba el pago.</p>
+      <button class="primary" id="seguir" ${state.hora==null?"disabled":""}>Continuar</button>
+    </div>`;
+  $app.querySelectorAll(".day").forEach(b => b.onclick = () => { state.fecha = b.dataset.f; state.hora = null; vistaElegir(); });
+  $app.querySelectorAll(".slot").forEach(b => b.onclick = () => { state.hora = Number(b.dataset.h); vistaElegir(); });
+  document.getElementById("seguir").onclick = () => { state.step = "form"; vistaCliente(); };
+}
+
+function vistaDatos() {
+  gen++;
+  const d = state.datos;
+  $app.innerHTML = `
+    <div class="card">
+      <h2>3. Tus datos</h2>
+      <div class="row"><span>Turno</span><span>${esc(fmtFecha(state.fecha))}, ${hh(state.hora)} hs</span></div>
+      <div class="row"><span>Importe</span><span><b>${money(CONFIG.monto)}</b></span></div>
+      <label>Nombre y apellido *</label><input id="nombre" value="${esc(d.nombre)}" autocomplete="name">
+      <label>Teléfono / WhatsApp *</label><input id="tel" value="${esc(d.tel)}" inputmode="tel" autocomplete="tel">
+      <label>Email (opcional)</label><input id="mail" value="${esc(d.mail)}" inputmode="email" autocomplete="email">
+      <p class="small">Al continuar te reservamos el horario por ${CONFIG.retencionMin} minutos y te llevamos a pagar${ONLINE ? " con Mercado Pago" : " (simulado)"}.</p>
+      <button class="primary" id="pagar">Pagar y reservar</button>
+      <button class="ghost" id="atras" style="width:100%;margin-top:8px">Cambiar horario</button>
+    </div>`;
+  document.getElementById("atras").onclick = () => { state.step = "pick"; vistaCliente(); };
+  const btn = document.getElementById("pagar");
+  btn.onclick = async () => {
+    const nombre = document.getElementById("nombre").value.trim(), tel = document.getElementById("tel").value.trim(), mail = document.getElementById("mail").value.trim();
+    state.datos = { nombre, tel, mail };
+    if (nombre.length < 3 || tel.replace(/\D/g,"").length < 6) { alert("Completá nombre y teléfono."); return; }
+    if (mail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail)) { alert("El email no parece válido."); return; }
+    btn.disabled = true; btn.textContent = "Reservando tu horario...";
+    try {
+      const r = await store.iniciarPago(state.fecha, state.hora, state.datos);
+      state.token = r.token;
+      if (r.init_point) { btn.textContent = "Redirigiendo a Mercado Pago..."; location.href = r.init_point; return; }
+      state.step = "retorno"; state.poll = false; vistaCliente();
+    } catch (e) {
+      if (/horario_ocupado/.test(e.message)) { state.msg = "Ese horario acaba de ocuparse. Elegí otro."; state.step = "pick"; state.hora = null; return vistaCliente(); }
+      btn.disabled = false; btn.textContent = "Pagar y reservar";
+      alert("No se pudo reservar. Revisá tu conexión e intentá de nuevo.");
+    }
+  };
+}
+
+async function vistaRetorno(poll, intento = 0) {
+  const my = ++gen, token = state.token;
+  let r = null, fallo = false;
+  try { r = await store.ver(token); } catch { fallo = true; }
+  if (my !== gen) return;
+  const tarjeta = (html) => { $app.innerHTML = `<div class="card">${html}</div>`; };
+  const nuevo = '<button class="ghost" id="nuevo" style="width:100%;margin-top:8px">Sacar otro turno</button>';
+  const wire = () => { const n = document.getElementById("nuevo"); if (n) n.onclick = () => nuevoTurno(); };
+
+  if (fallo) {
+    tarjeta(`<h2>No pudimos consultar tu reserva</h2><div class="msg warn">Revisá tu conexión.</div><button class="primary" id="reint">Reintentar</button>`);
+    document.getElementById("reint").onclick = () => vistaRetorno(false); return;
+  }
+  if (!r) { tarjeta(`<h2>No encontramos esta reserva</h2><p class="small">El enlace puede estar incompleto.</p>${nuevo}`); return wire(); }
+
+  if (r.estado === "confirmado") {
+    tarjeta(`<h2>¡Turno confirmado!</h2>
+      <div class="msg ok">Tu pago fue aprobado. Guardá el comprobante: lo podés volver a descargar desde este mismo enlace.</div>
+      <canvas id="cv"></canvas>
+      <button class="primary" id="desc">Descargar comprobante (imagen)</button>${nuevo}`);
+    dibujarComprobante(document.getElementById("cv"), r);
+    document.getElementById("desc").onclick = () => descargar(r);
+    return wire();
+  }
+
+  if (r.estado === "pendiente") {
+    if (poll && intento < 30) {
+      tarjeta(`<h2><span class="spin"></span>Confirmando tu pago...</h2>
+        <p class="small">Esto tarda unos segundos. No cierres esta página.</p>`);
+      setTimeout(() => { if (my === gen) vistaRetorno(true, intento + 1); }, 3000);
+      return;
+    }
+    tarjeta(`<h2>Tu pago todavía no figura aprobado</h2>
+      <div class="row"><span>Turno</span><span>${esc(fmtFecha(r.fecha))}, ${hh(r.hora)} hs</span></div>
+      <div class="row"><span>Horario reservado hasta</span><span>${hora12(r.vence)} hs</span></div>
+      <div class="msg warn" style="margin-top:12px">Si ya pagaste, puede demorar unos minutos (por ejemplo con pagos en efectivo). Volvé a verificar o guardá este enlace.</div>
+      <button class="primary" id="ver">Verificar de nuevo</button>
+      ${r.init_point ? '<button class="ghost" id="pagar" style="width:100%;margin-top:8px">Ir a pagar</button>' : ""}
+      ${!ONLINE ? '<button class="ghost" id="sim" style="width:100%;margin-top:8px">Simular pago aprobado (demo)</button>' : ""}
+      <button class="ghost" id="canc" style="width:100%;margin-top:8px">Cancelar reserva</button>`);
+    document.getElementById("ver").onclick = () => vistaRetorno(false);
+    const p = document.getElementById("pagar"); if (p) p.onclick = () => { location.href = r.init_point; };
+    const s = document.getElementById("sim"); if (s) s.onclick = async () => { await store.simular(token); vistaRetorno(false); };
+    document.getElementById("canc").onclick = async () => { if (confirm("¿Cancelar la reserva y liberar el horario?")) { try { await store.cancelar(token); nuevoTurno("Reserva cancelada."); } catch { alert("No se pudo cancelar."); } } };
+    return;
+  }
+
+  if (r.estado === "reembolsar" || r.estado === "reembolsado") {
+    tarjeta(`<h2>Hubo un problema con tu turno</h2>
+      <div class="msg warn">Recibimos tu pago pero el horario ya no estaba disponible. ${r.estado === "reembolsado" ? "Ya te devolvimos el dinero." : "Te vamos a devolver el dinero; si no te contactamos pronto, escribinos."}</div>
+      <div class="row"><span>Código</span><span>${esc(r.codigo)}</span></div>${nuevo}`);
+    return wire();
+  }
+
+  tarjeta(`<h2>${r.estado === "cancelado" ? "Reserva cancelada" : "La reserva venció"}</h2>
+    <div class="msg warn">${r.estado === "cancelado" ? "Esta reserva fue cancelada." : "Pasó el tiempo de reserva sin recibir el pago. Si pagaste igualmente, escribinos con tu código " + esc(r.codigo) + "."}</div>${nuevo}`);
+  wire();
+}
+
+/* ============ PANEL DE ADMINISTRACIÓN ============ */
+function vistaLogin(msg) {
+  $app.innerHTML = `
+    <div class="card">
+      <h2>Ingreso del administrador</h2>
+      ${msg ? `<div class="msg bad">${esc(msg)}</div>` : ""}
+      <label>Email</label><input id="em" type="email" autocomplete="username">
+      <label>Contraseña</label><input id="pw" type="password" autocomplete="current-password">
+      <button class="primary" id="entrar">Ingresar</button>
+    </div>`;
+  const go = async () => {
+    try { await remoteStore.login(document.getElementById("em").value.trim(), document.getElementById("pw").value); vistaAdmin(); }
+    catch (e) { vistaLogin("Email o contraseña incorrectos."); }
+  };
+  document.getElementById("entrar").onclick = go;
+  document.getElementById("pw").onkeydown = e => { if (e.key === "Enter") go(); };
+}
+
+async function vistaAdmin() {
+  if (!store.haySesion()) return vistaLogin();
+  let all;
+  try { all = await store.listar(); }
+  catch (e) { return /sesion_vencida/.test(e.message) ? vistaLogin("La sesión venció. Ingresá de nuevo.") : ($app.innerHTML = '<div class="card"><div class="msg bad">No se pudieron cargar las reservas.</div></div>'); }
+  if (location.hash !== "#admin") return;
+  const activo = b => ["confirmado","pendiente","reembolsar"].includes(b.estado);
+  const lista = (state.verTodo ? all : all.filter(activo))
+    .sort((a,b) => (a.fecha + String(a.hora).padStart(5,"0")).localeCompare(b.fecha + String(b.hora).padStart(5,"0")));
+  const tag = e => ({ confirmado: '<span class="tag ok">Pagado · confirmado</span>', pendiente: '<span class="tag inf">Esperando pago</span>',
+    vencido: '<span class="tag gr">Vencido sin pago</span>', cancelado: '<span class="tag gr">Cancelado</span>',
+    reembolsar: '<span class="tag bad">Devolver dinero</span>', reembolsado: '<span class="tag gr">Reembolsado</span>' }[e] || "");
+  const pendientes = all.filter(b => b.estado === "reembolsar").length;
+  $app.innerHTML = `
+    <div class="card">
+      <h2>Reservas (${lista.length})</h2>
+      ${pendientes ? `<div class="msg bad">Hay ${pendientes} pago(s) para devolver desde Mercado Pago (el horario ya no estaba disponible).</div>` : ""}
+      <p class="small">Los pagos aprobados se confirman solos. ${ONLINE ? "" : "<b>Modo demostración:</b> datos solo en este navegador."}</p>
+      ${lista.length ? lista.map(b => `
+        <div class="card" style="box-shadow:none;border:1px solid var(--line);margin:10px 0">
+          <div><b>${esc(b.nombre)}</b> ${tag(b.estado)}</div>
+          <div class="small">${esc(fmtFecha(b.fecha))}, ${hh(b.hora)} hs · ${money(b.monto)} · ${esc(b.codigo)}</div>
+          <div class="small">Tel: ${esc(b.tel)}${b.mail ? " · " + esc(b.mail) : ""}${b.mp_payment_id ? " · Op. " + esc(b.mp_payment_id) : ""}</div>
+          <div class="acts">
+            ${b.estado === "pendiente" ? `<button class="ghost" data-a="ok" data-c="${esc(b.codigo)}">Confirmar manualmente</button>` : ""}
+            ${(b.estado === "pendiente" || b.estado === "confirmado") ? `<button class="ghost" data-a="no" data-c="${esc(b.codigo)}">Cancelar turno</button>` : ""}
+            ${b.estado === "reembolsar" ? `<button class="ghost" data-a="re" data-c="${esc(b.codigo)}">Marcar reembolsado</button>` : ""}
+            ${b.estado === "confirmado" ? `<button class="ghost" data-a="img" data-c="${esc(b.codigo)}">Comprobante</button>` : ""}
+          </div>
+        </div>`).join("") : '<p class="small">No hay reservas para mostrar.</p>'}
+      <div class="acts">
+        <button class="ghost" id="refrescar">Actualizar</button>
+        <button class="ghost" id="todo">${state.verTodo ? "Ocultar vencidos y cancelados" : "Ver también vencidos y cancelados"}</button>
+        ${ONLINE ? '<button class="ghost" id="salir">Cerrar sesión</button>' : ""}
+      </div>
+    </div>`;
+  $app.querySelectorAll("[data-a]").forEach(btn => btn.onclick = async () => {
+    const b = all.find(x => x.codigo === btn.dataset.c);
+    if (!b) return;
+    try {
+      if (btn.dataset.a === "ok") { if (confirm("¿Confirmar este turno sin pago registrado en Mercado Pago?")) { await store.estado(b.codigo, "confirmado"); vistaAdmin(); } }
+      if (btn.dataset.a === "no") {
+        const pago = b.estado === "confirmado";
+        if (confirm(pago ? "Este turno ya está pagado. Al cancelarlo tenés que devolver el dinero desde Mercado Pago. ¿Cancelar igual?" : "¿Cancelar esta reserva?")) { await store.estado(b.codigo, pago ? "reembolsar" : "cancelado"); vistaAdmin(); }
+      }
+      if (btn.dataset.a === "re") { await store.estado(b.codigo, "reembolsado"); vistaAdmin(); }
+      if (btn.dataset.a === "img") descargar(b);
+    } catch (e) { /sesion_vencida/.test(e.message) ? vistaLogin("La sesión venció. Ingresá de nuevo.") : alert("No se pudo guardar el cambio."); }
+  });
+  document.getElementById("refrescar").onclick = vistaAdmin;
+  document.getElementById("todo").onclick = () => { state.verTodo = !state.verTodo; vistaAdmin(); };
+  const s = document.getElementById("salir"); if (s) s.onclick = () => { setToken(null); vistaLogin(); };
+}
+
+/* ============ COMPROBANTE EN IMAGEN ============ */
+function dibujarComprobante(cv, b) {
+  const W = 800, H = 1000, ctx = cv.getContext("2d");
+  cv.width = W; cv.height = H;
+  const conf = b.estado === "confirmado", mal = ["cancelado","vencido","reembolsar","reembolsado"].includes(b.estado);
+  const color = mal ? "#c0392b" : conf ? "#1a9d5c" : "#c77d00";
+  const estado = mal ? "TURNO NO VIGENTE" : conf ? "PAGO CONFIRMADO" : "PAGO PENDIENTE";
+  const demo = String(b.mp_payment_id || "").startsWith("DEMO-");
+
+  ctx.fillStyle = "#fff"; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = "#009ee3"; ctx.fillRect(0,0,W,150);
+  ctx.fillStyle = "#fff"; ctx.textAlign = "center";
+  ctx.font = "bold 40px system-ui, sans-serif"; ctx.fillText(CONFIG.negocio, W/2, 70);
+  ctx.font = "26px system-ui, sans-serif"; ctx.fillText("Comprobante de turno", W/2, 112);
+
+  ctx.fillStyle = color; ctx.font = "bold 30px system-ui, sans-serif";
+  ctx.fillText(estado + (demo ? " (DEMO)" : ""), W/2, 215);
+
+  const filas = [
+    ["Código", b.codigo], ["Nombre", b.nombre], ["Teléfono", b.tel],
+    ["Fecha", fmtFecha(b.fecha)], ["Horario", hh(b.hora) + " hs"], ["Importe", money(b.monto)],
+    ["Medio de pago", demo ? "Simulado" : "Mercado Pago"],
+    ["N° de operación", b.mp_payment_id || "—"],
+    ["Fecha de pago", b.pagado ? new Date(b.pagado).toLocaleString("es-AR") : "—"]
+  ];
+  let y = 280;
+  filas.forEach(([k,v]) => {
+    ctx.textAlign = "left"; ctx.fillStyle = "#6b7488"; ctx.font = "24px system-ui, sans-serif"; ctx.fillText(k, 60, y);
+    ctx.textAlign = "right"; ctx.fillStyle = "#1d2433"; ctx.font = "bold 26px system-ui, sans-serif";
+    let t = String(v); while (ctx.measureText(t).width > 470 && t.length > 4) t = t.slice(0,-2);
+    if (t !== String(v)) t += "…";
+    ctx.fillText(t, W-60, y);
+    ctx.strokeStyle = "#e3e7f0"; ctx.beginPath(); ctx.moveTo(60, y+20); ctx.lineTo(W-60, y+20); ctx.stroke();
+    y += 64;
+  });
+
+  ctx.textAlign = "center"; ctx.fillStyle = "#6b7488"; ctx.font = "20px system-ui, sans-serif";
+  ctx.fillText("Presentá este comprobante el día del turno.", W/2, 920);
+  if (demo) ctx.fillText("Comprobante de demostración: no corresponde a un pago real.", W/2, 952);
+}
+function descargar(b) {
+  const cv = document.createElement("canvas");
+  dibujarComprobante(cv, b);
+  cv.toBlob(blob => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "comprobante-turno-" + b.codigo + ".png";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }, "image/png");
+}
+
+route();
+</script>
+</body>
+</html>
