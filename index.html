@@ -242,7 +242,7 @@ function vistaDatos() {
       <label>Nombre y apellido *</label><input id="nombre" value="${esc(d.nombre)}" autocomplete="name">
       <label>Teléfono / WhatsApp *</label><input id="tel" value="${esc(d.tel)}" inputmode="tel" autocomplete="tel">
       <label>Email (opcional)</label><input id="mail" value="${esc(d.mail)}" inputmode="email" autocomplete="email">
-      <p class="small">Al continuar te reservamos el horario por ${CONFIG.retencionMin} minutos y te llevamos a pagar${ONLINE ? " con Mercado Pago" : " (simulado)"}.</p>
+      <p class="small">Al continuar te reservamos el horario por ${CONFIG.retencionMin} minutos y te llevamos a pagar${ONLINE ? " con tarjeta de crédito o débito" : " (simulado)"}.</p>
       <button class="primary" id="pagar">Pagar y reservar</button>
       <button class="ghost" id="atras" style="width:100%;margin-top:8px">Cambiar horario</button>
     </div>`;
